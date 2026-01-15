@@ -105,8 +105,13 @@ const Perfil = () => {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     required
-                    minLength={6}
+                    minLength={8}
+                    pattern="^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$"
+                    title="La contraseña debe tener al menos 8 caracteres, incluyendo mayúsculas, minúsculas y números"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Mínimo 8 caracteres con mayúsculas, minúsculas y números
+                  </p>
                 </div>
                 <Button type="submit" className="w-full" disabled={isSubmitting}>
                   {isSubmitting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
