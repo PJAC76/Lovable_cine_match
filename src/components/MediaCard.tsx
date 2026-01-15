@@ -1,7 +1,7 @@
 import { Star, Heart } from "lucide-react";
-import { MediaItem } from "@/lib/mockData";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import type { MediaItem } from "@/hooks/useMedia";
 
 interface MediaCardProps {
   item: MediaItem;
@@ -13,6 +13,12 @@ interface MediaCardProps {
 export function MediaCard({ item, rank, onFavorite, isFavorite = false }: MediaCardProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
+
+  // Get the historical score for display
+  const historicalScore = item.aggregated_scores?.find(
+    (s) => s.ranking_type === "historical"
+  );
+  const displayScore = historicalScore?.final_score || 0;
 
   return (
     <article
@@ -49,7 +55,7 @@ export function MediaCard({ item, rank, onFavorite, isFavorite = false }: MediaC
           <div className="absolute inset-0 bg-muted animate-pulse" />
         )}
         <img
-          src={item.posterUrl}
+          src={item.poster_url || "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=400&h=600&fit=crop"}
           alt={item.title}
           className={cn(
             "w-full h-full object-cover transition-transform duration-500",
@@ -67,7 +73,7 @@ export function MediaCard({ item, rank, onFavorite, isFavorite = false }: MediaC
           {/* Score Badge */}
           <div className="score-badge mb-2">
             <Star className="w-3.5 h-3.5 fill-current" />
-            <span>{item.finalScore.toFixed(1)}</span>
+            <span>{Number(displayScore).toFixed(1)}</span>
           </div>
 
           {/* Title & Year */}
@@ -78,7 +84,7 @@ export function MediaCard({ item, rank, onFavorite, isFavorite = false }: MediaC
 
           {/* Genres */}
           <div className="flex flex-wrap gap-1.5">
-            {item.genres.slice(0, 2).map((genre) => (
+            {item.genres?.slice(0, 2).map((genre) => (
               <span key={genre} className="genre-tag">
                 {genre}
               </span>

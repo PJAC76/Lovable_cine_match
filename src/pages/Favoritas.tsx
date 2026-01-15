@@ -1,34 +1,49 @@
 import { Layout } from "@/components/Layout";
 import { MediaCard } from "@/components/MediaCard";
-import { mockSeries, mockMovies } from "@/lib/mockData";
-import { Heart, Film, Tv } from "lucide-react";
+import { Heart, Film, Tv, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useFavorites } from "@/hooks/useFavorites";
+import { useAuth } from "@/hooks/useAuth";
+import { Link } from "react-router-dom";
 
 const Favoritas = () => {
-  const [favorites, setFavorites] = useState<string[]>(["1", "2", "m1", "m3"]);
+  const { isAuthenticated } = useAuth();
+  const { favorites, isLoading, toggleFavorite, isFavorite } = useFavorites();
   const [activeTab, setActiveTab] = useState<"all" | "series" | "movies">("all");
 
-  const handleFavorite = (id: string) => {
-    setFavorites((prev) =>
-      prev.includes(id)
-        ? prev.filter((f) => f !== id)
-        : [...prev, id]
-    );
-  };
+  const favoriteItems = favorites
+    .map((f) => f.media_items)
+    .filter((item): item is NonNullable<typeof item> => item !== null);
 
-  const allMedia = [...mockSeries, ...mockMovies];
-  const favoriteItems = allMedia.filter((item) => favorites.includes(item.id));
-  
-  const filteredItems = activeTab === "all" 
+  const filteredItems = activeTab === "all"
     ? favoriteItems
-    : favoriteItems.filter((item) => 
+    : favoriteItems.filter((item) =>
         activeTab === "series" ? item.type === "series" : item.type === "movie"
       );
 
   const seriesCount = favoriteItems.filter((i) => i.type === "series").length;
   const moviesCount = favoriteItems.filter((i) => i.type === "movie").length;
+
+  if (!isAuthenticated) {
+    return (
+      <Layout>
+        <div className="container py-8">
+          <div className="text-center py-20">
+            <Heart className="w-16 h-16 text-muted-foreground/30 mx-auto mb-4" />
+            <h3 className="text-xl font-semibold mb-2">Inicia sesión para ver tus favoritas</h3>
+            <p className="text-muted-foreground mb-6">
+              Guarda tus series y películas favoritas para acceder a ellas fácilmente
+            </p>
+            <Button asChild>
+              <Link to="/perfil">Iniciar sesión</Link>
+            </Button>
+          </div>
+        </div>
+      </Layout>
+    );
+  }
 
   return (
     <Layout>
@@ -85,19 +100,29 @@ const Favoritas = () => {
           </div>
         </div>
 
+        {/* Loading State */}
+        {isLoading && (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="w-8 h-8 animate-spin text-primary" />
+          </div>
+        )}
+
         {/* Favorites Grid */}
-        {filteredItems.length > 0 ? (
+        {!isLoading && filteredItems.length > 0 && (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
             {filteredItems.map((item) => (
               <MediaCard
                 key={item.id}
-                item={item}
+                item={item as any}
                 isFavorite={true}
-                onFavorite={handleFavorite}
+                onFavorite={toggleFavorite}
               />
             ))}
           </div>
-        ) : (
+        )}
+
+        {/* Empty State */}
+        {!isLoading && filteredItems.length === 0 && (
           <div className="text-center py-20">
             <Heart className="w-16 h-16 text-muted-foreground/30 mx-auto mb-4" />
             <h3 className="text-xl font-semibold mb-2">Sin favoritas aún</h3>
@@ -105,7 +130,7 @@ const Favoritas = () => {
               Explora los rankings y guarda tus series y películas favoritas
             </p>
             <Button asChild>
-              <a href="/">Explorar rankings</a>
+              <Link to="/">Explorar rankings</Link>
             </Button>
           </div>
         )}

@@ -2,12 +2,21 @@ import { useState } from "react";
 import { Layout } from "@/components/Layout";
 import { RankingSection } from "@/components/RankingSection";
 import { GenreFilter } from "@/components/GenreFilter";
-import { mockMovies, MediaItem } from "@/lib/mockData";
+import { useMedia, RankingType } from "@/hooks/useMedia";
+import { useFavorites } from "@/hooks/useFavorites";
 
 const Peliculas = () => {
-  const [viewMode, setViewMode] = useState<"historical" | "recent">("historical");
+  const [viewMode, setViewMode] = useState<RankingType>("historical");
   const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
-  const [favorites, setFavorites] = useState<string[]>([]);
+
+  const { toggleFavorite, isFavorite } = useFavorites();
+
+  const { data: movies = [], isLoading } = useMedia({
+    type: "movie",
+    rankingType: viewMode,
+    genres: selectedGenres.length > 0 ? selectedGenres : undefined,
+    limit: 10,
+  });
 
   const handleGenreToggle = (genre: string) => {
     setSelectedGenres((prev) =>
@@ -16,23 +25,6 @@ const Peliculas = () => {
         : [...prev, genre]
     );
   };
-
-  const handleFavorite = (id: string) => {
-    setFavorites((prev) =>
-      prev.includes(id)
-        ? prev.filter((f) => f !== id)
-        : [...prev, id]
-    );
-  };
-
-  const filterByGenres = (items: MediaItem[]) => {
-    if (selectedGenres.length === 0) return items;
-    return items.filter((item) =>
-      item.genres.some((genre) => selectedGenres.includes(genre))
-    );
-  };
-
-  const filteredMovies = filterByGenres(mockMovies);
 
   return (
     <Layout>
@@ -56,12 +48,12 @@ const Peliculas = () => {
         {/* Movies Ranking */}
         <RankingSection
           title="Ranking Completo"
-          items={filteredMovies}
-          type="movies"
+          items={movies}
+          isLoading={isLoading}
           viewMode={viewMode}
           onViewModeChange={setViewMode}
-          favorites={favorites}
-          onFavorite={handleFavorite}
+          isFavorite={isFavorite}
+          onFavorite={toggleFavorite}
         />
       </div>
     </Layout>
