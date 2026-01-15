@@ -21,7 +21,8 @@ const Series = () => {
     type: "series",
     rankingType: viewMode,
     genres: selectedGenres.length > 0 ? selectedGenres : undefined,
-    pageSize: 10,
+    pageSize: 5,
+    maxItems: 50,
   });
 
   const series = useMemo(() => {
