@@ -1,29 +1,29 @@
 import { MediaCard } from "./MediaCard";
-import { MediaItem } from "@/lib/mockData";
-import { ChevronRight, Clock, History } from "lucide-react";
+import { ChevronRight, Clock, History, Loader2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import type { MediaItem } from "@/hooks/useMedia";
 
 interface RankingSectionProps {
   title: string;
   items: MediaItem[];
-  type: "series" | "movies";
+  isLoading?: boolean;
   viewMode?: "historical" | "recent";
   onViewModeChange?: (mode: "historical" | "recent") => void;
   linkTo?: string;
-  favorites?: string[];
+  isFavorite?: (id: string) => boolean;
   onFavorite?: (id: string) => void;
 }
 
 export function RankingSection({
   title,
   items,
-  type,
+  isLoading = false,
   viewMode = "historical",
   onViewModeChange,
   linkTo,
-  favorites = [],
+  isFavorite,
   onFavorite,
 }: RankingSectionProps) {
   return (
@@ -72,18 +72,34 @@ export function RankingSection({
         )}
       </div>
 
+      {/* Loading State */}
+      {isLoading && (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        </div>
+      )}
+
       {/* Cards Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-        {items.slice(0, 10).map((item, index) => (
-          <MediaCard
-            key={item.id}
-            item={item}
-            rank={index + 1}
-            isFavorite={favorites.includes(item.id)}
-            onFavorite={onFavorite}
-          />
-        ))}
-      </div>
+      {!isLoading && items.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          {items.slice(0, 10).map((item, index) => (
+            <MediaCard
+              key={item.id}
+              item={item}
+              rank={index + 1}
+              isFavorite={isFavorite?.(item.id) ?? false}
+              onFavorite={onFavorite}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Empty State */}
+      {!isLoading && items.length === 0 && (
+        <div className="text-center py-12 text-muted-foreground">
+          No se encontraron resultados
+        </div>
+      )}
     </section>
   );
 }

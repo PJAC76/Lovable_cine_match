@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { allGenres } from "@/lib/mockData";
+import { useAllGenres } from "@/hooks/useMedia";
 
 interface GenreFilterProps {
   selectedGenres: string[];
@@ -7,10 +7,26 @@ interface GenreFilterProps {
 }
 
 export function GenreFilter({ selectedGenres, onGenreToggle }: GenreFilterProps) {
+  const { data: genres = [], isLoading } = useAllGenres();
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-wrap gap-2">
+        {[1, 2, 3, 4, 5].map((i) => (
+          <div key={i} className="h-10 w-20 bg-muted rounded-full animate-pulse" />
+        ))}
+      </div>
+    );
+  }
+
+  const handleClearAll = () => {
+    selectedGenres.forEach(onGenreToggle);
+  };
+
   return (
     <div className="flex flex-wrap gap-2">
       <button
-        onClick={() => selectedGenres.length > 0 && selectedGenres.forEach(onGenreToggle)}
+        onClick={handleClearAll}
         className={cn(
           "px-4 py-2 rounded-full text-sm font-medium transition-all",
           selectedGenres.length === 0
@@ -20,7 +36,7 @@ export function GenreFilter({ selectedGenres, onGenreToggle }: GenreFilterProps)
       >
         Todos
       </button>
-      {allGenres.map((genre) => (
+      {genres.map((genre) => (
         <button
           key={genre}
           onClick={() => onGenreToggle(genre)}

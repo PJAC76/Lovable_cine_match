@@ -3,13 +3,29 @@ import { Layout } from "@/components/Layout";
 import { HeroSection } from "@/components/HeroSection";
 import { RankingSection } from "@/components/RankingSection";
 import { GenreFilter } from "@/components/GenreFilter";
-import { mockSeries, mockMovies, MediaItem } from "@/lib/mockData";
+import { useMedia, RankingType } from "@/hooks/useMedia";
+import { useFavorites } from "@/hooks/useFavorites";
 
 const Index = () => {
-  const [seriesViewMode, setSeriesViewMode] = useState<"historical" | "recent">("historical");
-  const [moviesViewMode, setMoviesViewMode] = useState<"historical" | "recent">("historical");
+  const [seriesViewMode, setSeriesViewMode] = useState<RankingType>("historical");
+  const [moviesViewMode, setMoviesViewMode] = useState<RankingType>("historical");
   const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
-  const [favorites, setFavorites] = useState<string[]>([]);
+
+  const { toggleFavorite, isFavorite } = useFavorites();
+
+  const { data: series = [], isLoading: seriesLoading } = useMedia({
+    type: "series",
+    rankingType: seriesViewMode,
+    genres: selectedGenres.length > 0 ? selectedGenres : undefined,
+    limit: 10,
+  });
+
+  const { data: movies = [], isLoading: moviesLoading } = useMedia({
+    type: "movie",
+    rankingType: moviesViewMode,
+    genres: selectedGenres.length > 0 ? selectedGenres : undefined,
+    limit: 10,
+  });
 
   const handleGenreToggle = (genre: string) => {
     setSelectedGenres((prev) =>
@@ -18,32 +34,6 @@ const Index = () => {
         : [...prev, genre]
     );
   };
-
-  const handleFavorite = (id: string) => {
-    setFavorites((prev) =>
-      prev.includes(id)
-        ? prev.filter((f) => f !== id)
-        : [...prev, id]
-    );
-  };
-
-  const filterByGenres = (items: MediaItem[]) => {
-    if (selectedGenres.length === 0) return items;
-    return items.filter((item) =>
-      item.genres.some((genre) => selectedGenres.includes(genre))
-    );
-  };
-
-  // Simulate "recent" mode by shuffling (in real app, this would be different data)
-  const getItems = (items: MediaItem[], mode: "historical" | "recent") => {
-    if (mode === "recent") {
-      return [...items].sort(() => Math.random() - 0.5);
-    }
-    return items;
-  };
-
-  const filteredSeries = filterByGenres(getItems(mockSeries, seriesViewMode));
-  const filteredMovies = filterByGenres(getItems(mockMovies, moviesViewMode));
 
   return (
     <Layout>
@@ -62,25 +52,25 @@ const Index = () => {
         {/* Series Section */}
         <RankingSection
           title="Top 10 Series"
-          items={filteredSeries}
-          type="series"
+          items={series}
+          isLoading={seriesLoading}
           viewMode={seriesViewMode}
           onViewModeChange={setSeriesViewMode}
           linkTo="/series"
-          favorites={favorites}
-          onFavorite={handleFavorite}
+          isFavorite={isFavorite}
+          onFavorite={toggleFavorite}
         />
 
         {/* Movies Section */}
         <RankingSection
           title="Top 10 Películas"
-          items={filteredMovies}
-          type="movies"
+          items={movies}
+          isLoading={moviesLoading}
           viewMode={moviesViewMode}
           onViewModeChange={setMoviesViewMode}
           linkTo="/peliculas"
-          favorites={favorites}
-          onFavorite={handleFavorite}
+          isFavorite={isFavorite}
+          onFavorite={toggleFavorite}
         />
       </div>
     </Layout>
