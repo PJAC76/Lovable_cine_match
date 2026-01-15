@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Layout } from "@/components/Layout";
 import { RankingSection } from "@/components/RankingSection";
 import { GenreFilter } from "@/components/GenreFilter";
-import { useMedia, RankingType } from "@/hooks/useMedia";
+import { useInfiniteMedia, RankingType } from "@/hooks/useInfiniteMedia";
 import { useFavorites } from "@/hooks/useFavorites";
 
 const Peliculas = () => {
@@ -11,12 +11,22 @@ const Peliculas = () => {
 
   const { toggleFavorite, isFavorite } = useFavorites();
 
-  const { data: movies = [], isLoading } = useMedia({
+  const {
+    data,
+    isLoading,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  } = useInfiniteMedia({
     type: "movie",
     rankingType: viewMode,
     genres: selectedGenres.length > 0 ? selectedGenres : undefined,
-    limit: 10,
+    pageSize: 10,
   });
+
+  const movies = useMemo(() => {
+    return data?.pages.flatMap((page) => page.items) ?? [];
+  }, [data]);
 
   const handleGenreToggle = (genre: string) => {
     setSelectedGenres((prev) =>
@@ -54,6 +64,9 @@ const Peliculas = () => {
           onViewModeChange={setViewMode}
           isFavorite={isFavorite}
           onFavorite={toggleFavorite}
+          hasNextPage={hasNextPage}
+          isFetchingNextPage={isFetchingNextPage}
+          onLoadMore={() => fetchNextPage()}
         />
       </div>
     </Layout>

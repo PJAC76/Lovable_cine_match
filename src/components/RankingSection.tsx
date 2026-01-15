@@ -1,5 +1,5 @@
 import { MediaCard } from "./MediaCard";
-import { ChevronRight, Clock, History, Loader2 } from "lucide-react";
+import { ChevronRight, Clock, History, Loader2, Plus } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -14,6 +14,9 @@ interface RankingSectionProps {
   linkTo?: string;
   isFavorite?: (id: string) => boolean;
   onFavorite?: (id: string) => void;
+  hasNextPage?: boolean;
+  isFetchingNextPage?: boolean;
+  onLoadMore?: () => void;
 }
 
 export function RankingSection({
@@ -25,6 +28,9 @@ export function RankingSection({
   linkTo,
   isFavorite,
   onFavorite,
+  hasNextPage,
+  isFetchingNextPage,
+  onLoadMore,
 }: RankingSectionProps) {
   return (
     <section className="space-y-6">
@@ -91,6 +97,31 @@ export function RankingSection({
               onFavorite={onFavorite}
             />
           ))}
+        </div>
+      )}
+
+      {/* Load More Button */}
+      {!isLoading && hasNextPage && onLoadMore && (
+        <div className="flex justify-center pt-4">
+          <Button
+            variant="outline"
+            size="lg"
+            onClick={onLoadMore}
+            disabled={isFetchingNextPage}
+            className="min-w-[200px]"
+          >
+            {isFetchingNextPage ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Cargando...
+              </>
+            ) : (
+              <>
+                <Plus className="w-4 h-4 mr-2" />
+                Cargar más
+              </>
+            )}
+          </Button>
         </div>
       )}
 
