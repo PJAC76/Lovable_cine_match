@@ -1,21 +1,27 @@
 import { Layout } from "@/components/Layout";
 import { MediaCard } from "@/components/MediaCard";
+import { SearchMediaForm } from "@/components/SearchMediaForm";
+import { RecommendationsSection } from "@/components/RecommendationsSection";
 import { Heart, Film, Tv, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useFavorites } from "@/hooks/useFavorites";
+import { useRecommendations } from "@/hooks/useRecommendations";
 import { useAuth } from "@/hooks/useAuth";
 import { Link } from "react-router-dom";
 
 const Favoritas = () => {
   const { isAuthenticated } = useAuth();
-  const { favorites, isLoading, toggleFavorite, isFavorite } = useFavorites();
+  const { favorites, isLoading, toggleFavorite, isFavorite, addFavorite } = useFavorites();
+  const { recommendations, isLoading: isLoadingRecs, error: recsError, getRecommendations } = useRecommendations();
   const [activeTab, setActiveTab] = useState<"all" | "series" | "movies">("all");
 
   const favoriteItems = favorites
     .map((f) => f.media_items)
     .filter((item): item is NonNullable<typeof item> => item !== null);
+
+  const favoriteIds = favorites.map((f) => f.media_item_id);
 
   const filteredItems = activeTab === "all"
     ? favoriteItems
@@ -25,6 +31,14 @@ const Favoritas = () => {
 
   const seriesCount = favoriteItems.filter((i) => i.type === "series").length;
   const moviesCount = favoriteItems.filter((i) => i.type === "movie").length;
+
+  const handleAddFromSearch = (mediaId: string) => {
+    addFavorite.mutate(mediaId);
+  };
+
+  const handleGetRecommendations = () => {
+    getRecommendations(favoriteIds);
+  };
 
   if (!isAuthenticated) {
     return (
@@ -100,6 +114,15 @@ const Favoritas = () => {
           </div>
         </div>
 
+        {/* Search Form */}
+        <div className="bg-card border border-border rounded-lg p-6">
+          <h2 className="text-lg font-semibold mb-4">Buscar y añadir a favoritas</h2>
+          <SearchMediaForm
+            onAddFavorite={handleAddFromSearch}
+            existingFavoriteIds={favoriteIds}
+          />
+        </div>
+
         {/* Loading State */}
         {isLoading && (
           <div className="flex items-center justify-center py-12">
@@ -109,31 +132,44 @@ const Favoritas = () => {
 
         {/* Favorites Grid */}
         {!isLoading && filteredItems.length > 0 && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-            {filteredItems.map((item) => (
-              <MediaCard
-                key={item.id}
-                item={item as any}
-                isFavorite={true}
-                onFavorite={toggleFavorite}
-              />
-            ))}
+          <div>
+            <h2 className="text-xl font-semibold mb-4">Tus favoritas</h2>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+              {filteredItems.map((item) => (
+                <MediaCard
+                  key={item.id}
+                  item={item as any}
+                  isFavorite={true}
+                  onFavorite={toggleFavorite}
+                />
+              ))}
+            </div>
           </div>
         )}
 
-        {/* Empty State */}
+        {/* Empty State for favorites */}
         {!isLoading && filteredItems.length === 0 && (
-          <div className="text-center py-20">
-            <Heart className="w-16 h-16 text-muted-foreground/30 mx-auto mb-4" />
-            <h3 className="text-xl font-semibold mb-2">Sin favoritas aún</h3>
-            <p className="text-muted-foreground mb-6">
-              Explora los rankings y guarda tus series y películas favoritas
+          <div className="text-center py-12">
+            <Heart className="w-12 h-12 text-muted-foreground/30 mx-auto mb-3" />
+            <h3 className="text-lg font-semibold mb-2">Sin favoritas aún</h3>
+            <p className="text-muted-foreground">
+              Usa el buscador de arriba para añadir series y películas
             </p>
-            <Button asChild>
-              <Link to="/">Explorar rankings</Link>
-            </Button>
           </div>
         )}
+
+        {/* Recommendations Section */}
+        <div className="border-t border-border pt-8">
+          <RecommendationsSection
+            recommendations={recommendations}
+            isLoading={isLoadingRecs}
+            error={recsError}
+            onGetRecommendations={handleGetRecommendations}
+            onFavorite={toggleFavorite}
+            isFavorite={isFavorite}
+            hasFavorites={favoriteIds.length > 0}
+          />
+        </div>
       </div>
     </Layout>
   );
