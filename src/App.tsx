@@ -8,6 +8,8 @@ import Series from "./pages/Series";
 import Peliculas from "./pages/Peliculas";
 import Favoritas from "./pages/Favoritas";
 import Perfil from "./pages/Perfil";
+import MediaDetail from "./pages/MediaDetail";
+import Install from "./pages/Install";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -24,6 +26,8 @@ const App = () => (
           <Route path="/peliculas" element={<Peliculas />} />
           <Route path="/favoritas" element={<Favoritas />} />
           <Route path="/perfil" element={<Perfil />} />
+          <Route path="/media/:id" element={<MediaDetail />} />
+          <Route path="/install" element={<Install />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>
