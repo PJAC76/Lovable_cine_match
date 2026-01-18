@@ -1,6 +1,7 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import type { Tables } from "@/integrations/supabase/types";
+import { getYearRangesForRankingType } from "@/lib/dateRanges";
 
 export type MediaItem = Tables<"media_items"> & {
   aggregated_scores: Tables<"aggregated_scores">[];
@@ -33,22 +34,10 @@ export function useInfiniteMedia(options: UseInfiniteMediaOptions = {}) {
       const remainingItems = maxItems - pageParam;
       const itemsToFetch = Math.min(pageSize, remainingItems);
 
-      // Get all aggregated scores for this ranking type first, then paginate
-      const { data: allScores, error: allScoresError } = await supabase
-        .from("aggregated_scores")
-        .select("media_item_id, final_score, total_votes")
-        .eq("ranking_type", rankingType)
-        .order("final_score", { ascending: false });
+      // Get year ranges based on ranking type
+      const { minYear, maxYear } = getYearRangesForRankingType(rankingType);
 
-      if (allScoresError) throw allScoresError;
-      if (!allScores || allScores.length === 0) {
-        return { items: [], nextOffset: null, totalLoaded: pageParam };
-      }
-
-      // Get all media item IDs
-      const allMediaItemIds = allScores.map((s) => s.media_item_id);
-
-      // Get all media items to filter by type
+      // Get all media items filtered by year range
       let mediaQuery = supabase
         .from("media_items")
         .select(`
@@ -56,7 +45,8 @@ export function useInfiniteMedia(options: UseInfiniteMediaOptions = {}) {
           aggregated_scores (*),
           sources_scores (*)
         `)
-        .in("id", allMediaItemIds);
+        .gte("year", minYear)
+        .lte("year", maxYear);
 
       if (type) {
         mediaQuery = mediaQuery.eq("type", type);
@@ -65,20 +55,24 @@ export function useInfiniteMedia(options: UseInfiniteMediaOptions = {}) {
       const { data: allMediaItems, error: mediaError } = await mediaQuery;
 
       if (mediaError) throw mediaError;
+      if (!allMediaItems || allMediaItems.length === 0) {
+        return { items: [], nextOffset: null, totalLoaded: pageParam };
+      }
 
       // Filter by genres if provided
-      let filtered = allMediaItems || [];
+      let filtered = allMediaItems;
       if (genres && genres.length > 0) {
         filtered = filtered.filter((item) =>
           item.genres.some((g) => genres.includes(g))
         );
       }
 
-      // Sort by ranking score
-      const scoreMap = new Map(allScores.map((s) => [s.media_item_id, s.final_score]));
+      // Sort by final_score from aggregated_scores (prefer the matching ranking_type)
       filtered.sort((a, b) => {
-        const scoreA = scoreMap.get(a.id) || 0;
-        const scoreB = scoreMap.get(b.id) || 0;
+        const scoreA = a.aggregated_scores.find(s => s.ranking_type === rankingType)?.final_score 
+          || a.aggregated_scores[0]?.final_score || 0;
+        const scoreB = b.aggregated_scores.find(s => s.ranking_type === rankingType)?.final_score 
+          || b.aggregated_scores[0]?.final_score || 0;
         return Number(scoreB) - Number(scoreA);
       });
 
