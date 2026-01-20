@@ -31,7 +31,7 @@ Deno.serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { mediaType, year } = await req.json();
+    const { mediaType, year, updateExisting } = await req.json();
     
     // FilmAffinity URLs for best movies/series by year
     const urls: Record<string, Record<number, string>> = {
@@ -55,7 +55,7 @@ Deno.serve(async (req) => {
 
     console.log(`Scraping ${targetType}s from ${targetYear}: ${url}`);
 
-    // Scrape the page using Firecrawl
+    // Scrape the page using Firecrawl - request markdown format
     const scrapeResponse = await fetch("https://api.firecrawl.dev/v1/scrape", {
       method: "POST",
       headers: {
@@ -64,9 +64,9 @@ Deno.serve(async (req) => {
       },
       body: JSON.stringify({
         url,
-        formats: ["markdown", "html"],
+        formats: ["markdown"],
         onlyMainContent: true,
-        waitFor: 2000,
+        waitFor: 3000,
       }),
     });
 
@@ -77,19 +77,23 @@ Deno.serve(async (req) => {
       throw new Error(scrapeData.error || "Failed to scrape FilmAffinity");
     }
 
-    const html = scrapeData.data?.html || scrapeData.html || "";
     const markdown = scrapeData.data?.markdown || scrapeData.markdown || "";
 
-    console.log("Scraped content length:", html.length, "chars");
-    console.log("Markdown preview:", markdown.substring(0, 500));
+    console.log("Scraped markdown length:", markdown.length, "chars");
 
     // Parse the scraped content to extract media items
-    const mediaItems = parseFilmAffinityContent(html, markdown, targetType, targetYear);
+    const mediaItems = parseFilmAffinityMarkdown(markdown, targetType, targetYear);
 
     console.log(`Parsed ${mediaItems.length} ${targetType}s`);
 
-    // Insert into database
+    // Log first few items for debugging
+    mediaItems.slice(0, 5).forEach((item, i) => {
+      console.log(`Item ${i + 1}: ${item.title} - Score: ${item.filmaffinity_score} - Poster: ${item.poster_url ? 'YES' : 'NO'}`);
+    });
+
+    // Insert or update database
     const insertedItems: string[] = [];
+    const updatedItems: string[] = [];
     const errors: string[] = [];
 
     for (const item of mediaItems) {
@@ -97,18 +101,86 @@ Deno.serve(async (req) => {
         // Check if item already exists
         const { data: existing } = await supabase
           .from("media_items")
-          .select("id")
+          .select("id, poster_url")
           .eq("title", item.title)
           .eq("year", item.year)
           .eq("type", item.type)
           .maybeSingle();
 
         if (existing) {
-          console.log(`Skipping existing: ${item.title} (${item.year})`);
+          if (updateExisting) {
+            // Update existing item with new data
+            const updates: Record<string, unknown> = {};
+            if (item.poster_url && !existing.poster_url) {
+              updates.poster_url = item.poster_url;
+            }
+            if (item.genres?.length > 0) {
+              updates.genres = item.genres;
+            }
+
+            if (Object.keys(updates).length > 0) {
+              await supabase
+                .from("media_items")
+                .update(updates)
+                .eq("id", existing.id);
+            }
+
+            // Update or insert scores
+            if (item.filmaffinity_score) {
+              // Upsert source score
+              const { data: existingScore } = await supabase
+                .from("sources_scores")
+                .select("id")
+                .eq("media_item_id", existing.id)
+                .eq("source", "filmaffinity")
+                .maybeSingle();
+
+              if (existingScore) {
+                await supabase
+                  .from("sources_scores")
+                  .update({ score_normalized: item.filmaffinity_score })
+                  .eq("id", existingScore.id);
+              } else {
+                await supabase.from("sources_scores").insert({
+                  media_item_id: existing.id,
+                  source: "filmaffinity",
+                  score_normalized: item.filmaffinity_score,
+                  votes_count: 0,
+                });
+              }
+
+              // Upsert aggregated score
+              const { data: existingAgg } = await supabase
+                .from("aggregated_scores")
+                .select("id")
+                .eq("media_item_id", existing.id)
+                .eq("ranking_type", "recent")
+                .maybeSingle();
+
+              if (existingAgg) {
+                await supabase
+                  .from("aggregated_scores")
+                  .update({ final_score: item.filmaffinity_score })
+                  .eq("id", existingAgg.id);
+              } else {
+                await supabase.from("aggregated_scores").insert({
+                  media_item_id: existing.id,
+                  ranking_type: "recent",
+                  final_score: item.filmaffinity_score,
+                  total_votes: 0,
+                });
+              }
+            }
+
+            updatedItems.push(item.title);
+            console.log(`Updated: ${item.title}`);
+          } else {
+            console.log(`Skipping existing: ${item.title} (${item.year})`);
+          }
           continue;
         }
 
-        // Insert media item
+        // Insert new media item
         const { data: insertedMedia, error: insertError } = await supabase
           .from("media_items")
           .insert({
@@ -146,7 +218,7 @@ Deno.serve(async (req) => {
         }
 
         insertedItems.push(item.title);
-        console.log(`Inserted: ${item.title} (${item.year})`);
+        console.log(`Inserted: ${item.title} (${item.year}) - Score: ${item.filmaffinity_score}`);
       } catch (err) {
         errors.push(`Error processing ${item.title}: ${err}`);
       }
@@ -157,9 +229,11 @@ Deno.serve(async (req) => {
         success: true,
         scraped: mediaItems.length,
         inserted: insertedItems.length,
+        updated: updatedItems.length,
         insertedTitles: insertedItems,
+        updatedTitles: updatedItems,
         errors,
-        rawMarkdown: markdown.substring(0, 2000),
+        sampleItems: mediaItems.slice(0, 5),
       }),
       {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -180,70 +254,112 @@ Deno.serve(async (req) => {
   }
 });
 
-function parseFilmAffinityContent(
-  html: string,
+function parseFilmAffinityMarkdown(
   markdown: string,
   type: "movie" | "series",
   year: number
 ): ScrapedMedia[] {
   const items: ScrapedMedia[] = [];
+  
+  // FilmAffinity markdown format from the ranking page:
+  // - [![Title (Info)](https://pics.filmaffinity.com/xxx-msmall.jpg)](https://www.filmaffinity.com/es/filmXXX.html)
+  // [Title](https://www.filmaffinity.com/es/filmXXX.html)
+  // ... other info ...
+  // - 8,1 (score)
+  // 572 (votes)
 
-  // Try to extract from markdown - FilmAffinity lists usually have format:
-  // Title - Score - Year
-  // Or in table format with rankings
-
-  // Pattern 1: Look for movie titles with scores in markdown
-  // Format usually: "1. Movie Title (7.5)"
-  const titleScorePattern = /(\d+)\.\s*\[?([^\]\(\n]+?)(?:\]|\s*)\(?(\d[\.,]\d)?\)?/g;
+  // Pattern to find movie entries with poster and link
+  // Looking for: [![...](poster_url)](film_url)
+// ...
+// [Title](film_url)
+  const entryPattern = /\\[!\[[^\]]*\]\((https:\/\/pics\.filmaffinity\.com\/[^)]+)\)\]\([^)]+\)[\s\S]*?\[([^\]]+)\]\(https:\/\/www\.filmaffinity\.com\/es\/film\d+\.html[^)]*\)[\s\S]*-(\d[\.,]\d)/g;
+  
   let match;
-
-  while ((match = titleScorePattern.exec(markdown)) !== null) {
-    const title = match[2].trim().replace(/\*\*/g, "").replace(/\[|\]/g, "");
-    const score = match[3] ? parseFloat(match[3].replace(",", ".")) : undefined;
-
-    if (title && title.length > 2 && title.length < 150) {
+  while ((match = entryPattern.exec(markdown)) !== null) {
+    const posterUrl = match[1];
+    const title = cleanTitle(match[2]);
+    const score = parseFloat(match[3].replace(",", "."));
+    
+    if (title && title.length > 1 && title.length < 150) {
+      // Convert small poster to medium size
+      const mediumPoster = posterUrl.replace("-msmall.", "-mmed.");
+      
       items.push({
         title,
         year,
         type,
+        poster_url: mediumPoster,
         genres: [],
         filmaffinity_score: score,
       });
     }
   }
 
-  // Pattern 2: Look for titles in HTML links
-  // FilmAffinity uses links like /es/film123456.html
-  const linkPattern = /<a[^>]*href="[^"]*\/film\d+\.html"[^>]*>([^<]+)<\/a>/gi;
-  while ((match = linkPattern.exec(html)) !== null) {
-    const title = match[1].trim();
+  // If the first pattern didn't work well, try alternative approach
+  if (items.length < 5) {
+    console.log("Trying alternative parsing...");
     
-    // Avoid duplicates
-    if (title && title.length > 2 && !items.find(i => i.title === title)) {
+    // Extract all posters
+    const posterPattern = /\\[!\[[^\]]*\]\((https:\/\/pics\.filmaffinity\.com\/[^)]+)\)\]/g;
+    const posters: string[] = [];
+    while ((match = posterPattern.exec(markdown)) !== null) {
+      posters.push(match[1].replace("-msmall.", "-mmed."));
+    }
+    
+    // Extract all titles with film links
+    const titlePattern = /\[([^\]]+)\]\(https:\/\/www\.filmaffinity\.com\/es\/film\d+\.html[^)]*\)/g;
+    const titles: string[] = [];
+    while ((match = titlePattern.exec(markdown)) !== null) {
+      const title = cleanTitle(match[1]);
+      // Avoid duplicates and short titles, filter out UI elements
+      if (title && title.length > 2 && title.length < 150 && 
+          !title.includes("Sort by") && !title.includes("Copia") &&
+          !titles.includes(title)) {
+        titles.push(title);
+      }
+    }
+    
+    // Extract all scores (format: "- 7,8" or "- 8,1")
+    const scorePattern = /-\s*(\d[\.,]\d)\n/g;
+    const scores: number[] = [];
+    while ((match = scorePattern.exec(markdown)) !== null) {
+      scores.push(parseFloat(match[1].replace(",", ".")));
+    }
+    
+    console.log(`Found ${titles.length} titles, ${scores.length} scores, ${posters.length} posters`);
+    
+    // Clear previous items and rebuild
+    items.length = 0;
+    
+    // Match by position
+    for (let i = 0; i < titles.length && i < 50; i++) {
       items.push({
-        title,
+        title: titles[i],
         year,
         type,
+        poster_url: i < posters.length ? posters[i] : undefined,
         genres: [],
+        filmaffinity_score: i < scores.length ? scores[i] : undefined,
       });
     }
   }
 
-  // Pattern 3: Look for score values near titles
-  const scorePattern = /<div[^>]*class="[^"]*avgrat[^"]*"[^>]*>(\d[\.,]\d)<\/div>/gi;
-  const scores: number[] = [];
-  while ((match = scorePattern.exec(html)) !== null) {
-    scores.push(parseFloat(match[1].replace(",", ".")));
-  }
+  // Filter out items without scores (likely parsing errors)
+  const validItems = items.filter(item => 
+    item.filmaffinity_score && 
+    item.filmaffinity_score >= 1 && 
+    item.filmaffinity_score <= 10
+  );
 
-  // Associate scores with items that don't have them
-  let scoreIndex = 0;
-  for (const item of items) {
-    if (!item.filmaffinity_score && scoreIndex < scores.length) {
-      item.filmaffinity_score = scores[scoreIndex++];
-    }
-  }
+  return validItems.slice(0, 50);
+}
 
-  // Limit to top 50 items
-  return items.slice(0, 50);
+function cleanTitle(title: string): string {
+  return title
+    .replace(/\s*\(Serie de TV\)\s*/gi, "")
+    .replace(/\s*\(Miniserie de TV\)\s*/gi, "")
+    .replace(/\s*\(TV\)\s*/gi, "")
+    .replace(/\s*\(Serie\)\s*/gi, "")
+    .replace(/\s*\(Miniserie\)\s*/gi, "")
+    .trim();
 }
