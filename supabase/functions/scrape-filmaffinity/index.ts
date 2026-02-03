@@ -14,6 +14,7 @@ interface ScrapedMedia {
   synopsis_short?: string;
   genres: string[];
   filmaffinity_score?: number;
+  filmId?: string;
 }
 
 Deno.serve(async (req) => {
@@ -31,7 +32,7 @@ Deno.serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { mediaType, year, updateExisting, forceUpdatePosters } = await req.json();
+    const { mediaType, year, updateExisting, forceUpdatePosters, forceUpdateSynopsis } = await req.json();
     
     // FilmAffinity URLs for best movies/series by year
     const urls: Record<string, Record<number, string>> = {
@@ -72,6 +73,62 @@ Deno.serve(async (req) => {
 
     const scrapeData = await scrapeResponse.json();
 
+    // Now fetch individual movie pages for synopsis (first 30 items)
+    const fetchSynopsis = async (filmId: string): Promise<string | undefined> => {
+      try {
+        const filmUrl = `https://www.filmaffinity.com/es/film${filmId}.html`;
+        const filmResponse = await fetch("https://api.firecrawl.dev/v1/scrape", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${firecrawlApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            url: filmUrl,
+            formats: ["markdown"],
+            onlyMainContent: true,
+            waitFor: 2000,
+          }),
+        });
+        
+        const filmData = await filmResponse.json();
+        const filmMarkdown = filmData.data?.markdown || filmData.markdown || "";
+        
+        // Extract synopsis from the movie page
+        // FilmAffinity format: "...GéneroXXXSinopsisActual synopsis text here.\n\n[![..."
+        // The synopsis is directly after "Sinopsis" word, no line breaks
+        let synopsisMatch = filmMarkdown.match(/Sinopsis\s*([^[\n]+)/i);
+        if (synopsisMatch) {
+          let synopsis = synopsisMatch[1].trim();
+          // Clean up and limit length
+          synopsis = synopsis.replace(/\s+/g, ' ').trim();
+          // Remove trailing markup if any
+          synopsis = synopsis.replace(/\[!\[.*$/, '').trim();
+          if (synopsis.length > 20 && synopsis.length < 500) {
+            if (synopsis.length > 300) {
+              synopsis = synopsis.substring(0, 297) + '...';
+            }
+            return synopsis;
+          }
+        }
+        
+        // Alternative: look for text after "Género" section that looks like a synopsis
+        const altMatch = filmMarkdown.match(/Género[^\n]+\n([A-ZÁÉÍÓÚ][^[\n]{50,})/);
+        if (altMatch) {
+          let synopsis = altMatch[1].trim();
+          if (synopsis.length > 300) {
+            synopsis = synopsis.substring(0, 297) + '...';
+          }
+          return synopsis;
+        }
+        
+        return undefined;
+      } catch (err) {
+        console.error(`Error fetching synopsis for film ${filmId}:`, err);
+        return undefined;
+      }
+    };
+
     if (!scrapeResponse.ok) {
       console.error("Firecrawl error:", scrapeData);
       throw new Error(scrapeData.error || "Failed to scrape FilmAffinity");
@@ -90,8 +147,22 @@ Deno.serve(async (req) => {
 
     // Log first few items for debugging
     mediaItems.slice(0, 5).forEach((item, i) => {
-      console.log(`Item ${i + 1}: ${item.title} - Score: ${item.filmaffinity_score} - Poster: ${item.poster_url ? item.poster_url.substring(0, 60) : 'NO'}`);
+      console.log(`Item ${i + 1}: ${item.title} - Score: ${item.filmaffinity_score} - Poster: ${item.poster_url ? item.poster_url.substring(0, 60) : 'NO'} - FilmId: ${item.filmId}`);
     });
+
+    // Fetch synopsis for first 10 items (to save API calls and avoid timeout)
+    console.log("Fetching synopsis for top items...");
+    const synopsisLimit = 10;
+    for (let i = 0; i < Math.min(mediaItems.length, synopsisLimit); i++) {
+      const item = mediaItems[i];
+      if (item.filmId) {
+        const synopsis = await fetchSynopsis(item.filmId);
+        if (synopsis) {
+          item.synopsis_short = synopsis;
+          console.log(`Synopsis for ${item.title}: ${synopsis.substring(0, 50)}...`);
+        }
+      }
+    }
 
     // Insert or update database
     const insertedItems: string[] = [];
@@ -118,7 +189,11 @@ Deno.serve(async (req) => {
             if (item.poster_url && (forceUpdatePosters || !existing.poster_url)) {
               updates.poster_url = item.poster_url;
             }
-            if (item.synopsis_short && !existing.synopsis_short) {
+            // Update synopsis if we have a real one (not placeholder) and either force or existing is placeholder
+            const isPlaceholderSynopsis = existing.synopsis_short?.startsWith("Película de") || 
+                                          existing.synopsis_short?.startsWith("Serie de") ||
+                                          !existing.synopsis_short;
+            if (item.synopsis_short && (forceUpdateSynopsis || isPlaceholderSynopsis)) {
               updates.synopsis_short = item.synopsis_short;
             }
             if (item.genres?.length > 0) {
@@ -345,23 +420,18 @@ function parseFilmAffinityMarkdown(
   
   // Build items by matching titles with scores and posters by position
   for (let i = 0; i < titleEntries.length && i < 50; i++) {
-    const { title } = titleEntries[i];
+    const { title, filmId } = titleEntries[i];
     const score = i < scores.length ? scores[i] : undefined;
     const poster = posterMap.get(i);
-    
-    // Generate a brief synopsis placeholder based on type
-    const synopsis = type === "series" 
-      ? `Serie de ${year}. Disponible en streaming.`
-      : `Película de ${year}. Disponible en cartelera.`;
     
     items.push({
       title,
       year,
       type,
       poster_url: poster,
-      synopsis_short: synopsis,
       genres: [],
       filmaffinity_score: score,
+      filmId,
     });
   }
 

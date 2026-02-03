@@ -15,11 +15,14 @@ export function MediaCard({ item, rank, onFavorite, isFavorite = false }: MediaC
   const [isHovered, setIsHovered] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
 
-  // Get the historical score for display
+  // Get the best available score for display (prefer historical, fallback to recent)
   const historicalScore = item.aggregated_scores?.find(
     (s) => s.ranking_type === "historical"
   );
-  const displayScore = historicalScore?.final_score || 0;
+  const recentScore = item.aggregated_scores?.find(
+    (s) => s.ranking_type === "recent"
+  );
+  const displayScore = historicalScore?.final_score || recentScore?.final_score || 0;
 
   return (
     <Link to={`/media/${item.id}`}>
