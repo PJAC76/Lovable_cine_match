@@ -31,7 +31,7 @@ Deno.serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { mediaType, year, updateExisting } = await req.json();
+    const { mediaType, year, updateExisting, forceUpdatePosters } = await req.json();
     
     // FilmAffinity URLs for best movies/series by year
     const urls: Record<string, Record<number, string>> = {
@@ -66,7 +66,7 @@ Deno.serve(async (req) => {
         url,
         formats: ["markdown"],
         onlyMainContent: true,
-        waitFor: 3000,
+        waitFor: 5000,
       }),
     });
 
@@ -80,6 +80,8 @@ Deno.serve(async (req) => {
     const markdown = scrapeData.data?.markdown || scrapeData.markdown || "";
 
     console.log("Scraped markdown length:", markdown.length, "chars");
+    // Log a sample of markdown for debugging
+    console.log("Markdown sample:", markdown.substring(0, 500));
 
     // Parse the scraped content to extract media items
     const mediaItems = parseFilmAffinityMarkdown(markdown, targetType, targetYear);
@@ -88,7 +90,7 @@ Deno.serve(async (req) => {
 
     // Log first few items for debugging
     mediaItems.slice(0, 5).forEach((item, i) => {
-      console.log(`Item ${i + 1}: ${item.title} - Score: ${item.filmaffinity_score} - Poster: ${item.poster_url ? 'YES' : 'NO'}`);
+      console.log(`Item ${i + 1}: ${item.title} - Score: ${item.filmaffinity_score} - Poster: ${item.poster_url ? item.poster_url.substring(0, 60) : 'NO'}`);
     });
 
     // Insert or update database
@@ -101,7 +103,7 @@ Deno.serve(async (req) => {
         // Check if item already exists
         const { data: existing } = await supabase
           .from("media_items")
-          .select("id, poster_url")
+          .select("id, poster_url, synopsis_short")
           .eq("title", item.title)
           .eq("year", item.year)
           .eq("type", item.type)
@@ -111,18 +113,29 @@ Deno.serve(async (req) => {
           if (updateExisting) {
             // Update existing item with new data
             const updates: Record<string, unknown> = {};
-            if (item.poster_url && !existing.poster_url) {
+            
+            // Update poster if we have one and either force update or no existing
+            if (item.poster_url && (forceUpdatePosters || !existing.poster_url)) {
               updates.poster_url = item.poster_url;
+            }
+            if (item.synopsis_short && !existing.synopsis_short) {
+              updates.synopsis_short = item.synopsis_short;
             }
             if (item.genres?.length > 0) {
               updates.genres = item.genres;
             }
 
             if (Object.keys(updates).length > 0) {
-              await supabase
+              const { error: updateError } = await supabase
                 .from("media_items")
                 .update(updates)
                 .eq("id", existing.id);
+              
+              if (updateError) {
+                console.error(`Error updating ${item.title}:`, updateError);
+              } else {
+                console.log(`Updated ${item.title} with:`, Object.keys(updates));
+              }
             }
 
             // Update or insert scores
@@ -173,7 +186,6 @@ Deno.serve(async (req) => {
             }
 
             updatedItems.push(item.title);
-            console.log(`Updated: ${item.title}`);
           } else {
             console.log(`Skipping existing: ${item.title} (${item.year})`);
           }
@@ -261,87 +273,96 @@ function parseFilmAffinityMarkdown(
 ): ScrapedMedia[] {
   const items: ScrapedMedia[] = [];
   
-  // FilmAffinity markdown format from the ranking page:
-  // - [![Title (Info)](https://pics.filmaffinity.com/xxx-msmall.jpg)](https://www.filmaffinity.com/es/filmXXX.html)
+  // FilmAffinity markdown format:
+  // [![Title](https://pics.filmaffinity.com/xxx-msmall.jpg)](link)
   // [Title](https://www.filmaffinity.com/es/filmXXX.html)
-  // ... other info ...
-  // - 8,1 (score)
-  // 572 (votes)
+  // Info text
+  // - 8,1
+  // votes
 
-  // Pattern to find movie entries with poster and link
-  // Looking for: [![...](poster_url)](film_url)
-// ...
-// [Title](film_url)
-  const entryPattern = /\\[!\[[^\]]*\]\((https:\/\/pics\.filmaffinity\.com\/[^)]+)\)\]\([^)]+\)[\s\S]*?\[([^\]]+)\]\(https:\/\/www\.filmaffinity\.com\/es\/film\d+\.html[^)]*\)[\s\S]*-(\d[\.,]\d)/g;
-  
-  let match;
-  while ((match = entryPattern.exec(markdown)) !== null) {
-    const posterUrl = match[1];
-    const title = cleanTitle(match[2]);
-    const score = parseFloat(match[3].replace(",", "."));
-    
-    if (title && title.length > 1 && title.length < 150) {
-      // Convert small poster to medium size
-      const mediumPoster = posterUrl.replace("-msmall.", "-mmed.");
-      
-      items.push({
-        title,
-        year,
-        type,
-        poster_url: mediumPoster,
-        genres: [],
-        filmaffinity_score: score,
-      });
-    }
-  }
-
-  // If the first pattern didn't work well, try alternative approach
-  if (items.length < 5) {
-    console.log("Trying alternative parsing...");
-    
-    // Extract all posters
-    const posterPattern = /\\[!\[[^\]]*\]\((https:\/\/pics\.filmaffinity\.com\/[^)]+)\)\]/g;
-    const posters: string[] = [];
-    while ((match = posterPattern.exec(markdown)) !== null) {
-      posters.push(match[1].replace("-msmall.", "-mmed."));
-    }
-    
-    // Extract all titles with film links
-    const titlePattern = /\[([^\]]+)\]\(https:\/\/www\.filmaffinity\.com\/es\/film\d+\.html[^)]*\)/g;
-    const titles: string[] = [];
-    while ((match = titlePattern.exec(markdown)) !== null) {
-      const title = cleanTitle(match[1]);
-      // Avoid duplicates and short titles, filter out UI elements
-      if (title && title.length > 2 && title.length < 150 && 
-          !title.includes("Sort by") && !title.includes("Copia") &&
-          !titles.includes(title)) {
-        titles.push(title);
+  // Extract all posters - looking for FilmAffinity image URLs
+  const posterRegex = /https:\/\/pics\.filmaffinity\.com\/[^\s\)\]"]+/g;
+  const allPosters: string[] = [];
+  let posterMatch;
+  while ((posterMatch = posterRegex.exec(markdown)) !== null) {
+    const url = posterMatch[0];
+    // Only keep actual movie posters (exclude icons, logos)
+    if (url.includes("-m") && (url.endsWith(".jpg") || url.endsWith(".png") || url.endsWith(".webp"))) {
+      // Convert to medium size
+      const mediumUrl = url.replace("-msmall.", "-mmed.").replace("-small.", "-mmed.");
+      if (!allPosters.includes(mediumUrl)) {
+        allPosters.push(mediumUrl);
       }
     }
+  }
+  
+  console.log(`Found ${allPosters.length} unique posters`);
+  
+  // Extract titles with film links
+  const titleRegex = /\[([^\]]+)\]\(https:\/\/www\.filmaffinity\.com\/es\/film(\d+)\.html[^\)]*\)/g;
+  const titleEntries: { title: string; filmId: string }[] = [];
+  let titleMatch;
+  while ((titleMatch = titleRegex.exec(markdown)) !== null) {
+    const rawTitle = titleMatch[1];
+    const filmId = titleMatch[2];
+    const title = cleanTitle(rawTitle);
     
-    // Extract all scores (format: "- 7,8" or "- 8,1")
-    const scorePattern = /-\s*(\d[\.,]\d)\n/g;
-    const scores: number[] = [];
-    while ((match = scorePattern.exec(markdown)) !== null) {
-      scores.push(parseFloat(match[1].replace(",", ".")));
+    // Filter out navigation elements and duplicates
+    if (title && 
+        title.length > 2 && 
+        title.length < 150 && 
+        !title.toLowerCase().includes("sort") &&
+        !title.toLowerCase().includes("copia") &&
+        !title.toLowerCase().includes("copy") &&
+        !titleEntries.find(e => e.filmId === filmId)) {
+      titleEntries.push({ title, filmId });
     }
-    
-    console.log(`Found ${titles.length} titles, ${scores.length} scores, ${posters.length} posters`);
-    
-    // Clear previous items and rebuild
-    items.length = 0;
-    
-    // Match by position
-    for (let i = 0; i < titles.length && i < 50; i++) {
-      items.push({
-        title: titles[i],
-        year,
-        type,
-        poster_url: i < posters.length ? posters[i] : undefined,
-        genres: [],
-        filmaffinity_score: i < scores.length ? scores[i] : undefined,
-      });
+  }
+  
+  console.log(`Found ${titleEntries.length} unique titles`);
+  
+  // Extract scores - format: "- 7,8" or "- 8,1" followed by newline
+  const scoreRegex = /- (\d[\.,]\d)\n/g;
+  const scores: number[] = [];
+  let scoreMatch;
+  while ((scoreMatch = scoreRegex.exec(markdown)) !== null) {
+    const score = parseFloat(scoreMatch[1].replace(",", "."));
+    if (score >= 1 && score <= 10) {
+      scores.push(score);
     }
+  }
+  
+  console.log(`Found ${scores.length} scores`);
+  
+  // Try to match posters to films by their ID in the URL
+  // FilmAffinity poster URLs often contain a slug related to the movie
+  const posterMap = new Map<number, string>();
+  
+  // For each poster, try to find its position/order
+  for (let i = 0; i < allPosters.length && i < titleEntries.length; i++) {
+    posterMap.set(i, allPosters[i]);
+  }
+  
+  // Build items by matching titles with scores and posters by position
+  for (let i = 0; i < titleEntries.length && i < 50; i++) {
+    const { title } = titleEntries[i];
+    const score = i < scores.length ? scores[i] : undefined;
+    const poster = posterMap.get(i);
+    
+    // Generate a brief synopsis placeholder based on type
+    const synopsis = type === "series" 
+      ? `Serie de ${year}. Disponible en streaming.`
+      : `Película de ${year}. Disponible en cartelera.`;
+    
+    items.push({
+      title,
+      year,
+      type,
+      poster_url: poster,
+      synopsis_short: synopsis,
+      genres: [],
+      filmaffinity_score: score,
+    });
   }
 
   // Filter out items without scores (likely parsing errors)
@@ -361,5 +382,6 @@ function cleanTitle(title: string): string {
     .replace(/\s*\(TV\)\s*/gi, "")
     .replace(/\s*\(Serie\)\s*/gi, "")
     .replace(/\s*\(Miniserie\)\s*/gi, "")
+    .replace(/\s*\(\d{4}\)\s*/g, "") // Remove year in parentheses
     .trim();
 }
